@@ -4,6 +4,11 @@ from PIL import Image
 import torch
 
 # ---------------------------------------------------------
+# MUST BE FIRST STREAMLIT COMMAND
+# ---------------------------------------------------------
+st.set_page_config(page_title="Image Caption Generator", layout="centered")
+
+# ---------------------------------------------------------
 # Load BLIP model
 # ---------------------------------------------------------
 @st.cache_resource
@@ -15,14 +20,12 @@ def load_blip():
 processor, model = load_blip()
 
 # ---------------------------------------------------------
-# Page Setup
+# Custom CSS
 # ---------------------------------------------------------
-st.set_page_config(page_title="Image Caption Generator", layout="centered")
-
 st.markdown(
     """
     <style>
-        .uploadbox:hover {
+        .stFileUploader:hover {
             border: 2px solid #4B9CD3 !important;
             background-color: #1a2027 !important;
             transition: 0.2s ease;
@@ -33,46 +36,39 @@ st.markdown(
 )
 
 # ---------------------------------------------------------
-# Title
+# Title & UI
 # ---------------------------------------------------------
 st.title("Image Caption Generator")
 st.write("Upload an image and generate a BLIP caption.")
 
-# ---------------------------------------------------------
-# Trigger Word Input
-# ---------------------------------------------------------
-trigger = st.text_input("Optional Trigger Word (for LoRA datasets)", value="")
+# Trigger token
+trigger = st.text_input(
+    "Optional Trigger Word (for LoRA training)",
+    value=""
+)
 
-# ---------------------------------------------------------
-# Image Upload
-# ---------------------------------------------------------
+# Upload box
 uploaded_file = st.file_uploader(
     "Drag and drop an image here",
     type=["jpg", "jpeg", "png"],
-    help="Upload a single image for captioning."
 )
 
-# ---------------------------------------------------------
-# Caption Generation Button
-# ---------------------------------------------------------
+# Generate Caption
 if uploaded_file and st.button("Generate Caption"):
 
     image = Image.open(uploaded_file).convert("RGB")
-
     st.image(image, caption="Uploaded Image", use_column_width=True)
 
-    # Process image using BLIP
     inputs = processor(image, return_tensors="pt")
     out = model.generate(**inputs)
     blip_caption = processor.decode(out[0], skip_special_tokens=True)
 
-    # Apply trigger word if provided
+    # Prepend trigger if provided
     if trigger.strip():
         final_caption = f"{trigger.strip()}. {blip_caption}"
     else:
         final_caption = blip_caption
 
-    # Display
     st.subheader("Generated Caption")
     st.markdown(
         f"""

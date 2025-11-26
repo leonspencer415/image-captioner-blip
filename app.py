@@ -1,124 +1,135 @@
 import streamlit as st
-from transformers import BLIPProcessor, BLIPForConditionalGeneration
+from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 import torch
 import io
 import zipfile
 
-# ---------------------------------------------------------
-# App Configuration
-# ---------------------------------------------------------
-st.set_page_config(page_title="BLIP Caption Generator",
-                   page_icon="🖼️",
-                   layout="centered")
+# -------------------------------------------------
+# Page Config
+# -------------------------------------------------
+st.set_page_config(
+    page_title="Image Caption Generator",
+    layout="centered",
+)
 
-st.markdown("""
-    <style>
-        .big-dropzone {
-            border: 3px dashed #4B9CD3;
-            padding: 40px;
-            border-radius: 12px;
-            text-align: center;
-            font-size: 18px;
-            color: #FFFFFF88;
-            transition: all 0.2s ease;
-        }
-        .big-dropzone:hover {
-            border-color: #76c7ff;
-            background-color: #1a1f26;
-            color: #FFFFFF;
-        }
-    </style>
-""", unsafe_allow_html=True)
-
-# ---------------------------------------------------------
-# Load BLIP Model
-# ---------------------------------------------------------
+# -------------------------------------------------
+# Load BLIP Model Once
+# -------------------------------------------------
 @st.cache_resource
 def load_blip():
-    processor = BLIPProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-    model = BLIPForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
+    processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+    model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
     return processor, model
 
 processor, model = load_blip()
 
-# ---------------------------------------------------------
-# UI Header
-# ---------------------------------------------------------
-st.title("🖼️ BLIP Image Caption Generator")
-st.write("Drop images → Generate captions → Download zipped dataset.")
+# -------------------------------------------------
+# Custom CSS (drag highlight)
+# -------------------------------------------------
+st.markdown(
+    """
+    <style>
+        .stFileUploader:hover {
+            border: 2px solid #4B9CD3 !important;
+            background-color: #1a2027 !important;
+            transition: 0.2s ease;
+        }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-# ---------------------------------------------------------
-# Trigger Word Input
-# ---------------------------------------------------------
+# -------------------------------------------------
+# UI Title
+# -------------------------------------------------
+st.title("Image Caption Generator")
+st.write("Upload one or more images and generate BLIP captions.")
+
+# -------------------------------------------------
+# Trigger Word
+# -------------------------------------------------
 trigger = st.text_input(
-    "Optional Trigger Word (used for LoRA datasets)",
-    placeholder="example: sbanks25"
+    "Optional Trigger Word (for LoRA training)",
+    value=""
 )
 
-# ---------------------------------------------------------
-# File Upload Section
-# ---------------------------------------------------------
-st.markdown('<div class="big-dropzone">Drag & drop up to 60 images</div>', unsafe_allow_html=True)
-
+# -------------------------------------------------
+# File Uploader — MULTIPLE FILES
+# -------------------------------------------------
 uploaded_files = st.file_uploader(
-    " ",
-    type=["png", "jpg", "jpeg", "webp"],
-    accept_multiple_files=True,
+    "Drag and drop up to 60 images here",
+    type=["jpg", "jpeg", "png"],
+    accept_multiple_files=True
 )
 
-# enforce max 60 images
-if uploaded_files:
-    if len(uploaded_files) > 60:
-        st.error("You can upload a maximum of 60 images.")
-        st.stop()
-    else:
-        st.success(f"Loaded {len(uploaded_files)} images ✔️")
+# -------------------------------------------------
+# Generate Button
+# -------------------------------------------------
+run_button = st.button("Generate Captions")
 
-# ---------------------------------------------------------
-# Process Button
-# ---------------------------------------------------------
-if st.button("Generate Captions", type="primary"):
+# -------------------------------------------------
+# CAPTION GENERATION
+# -------------------------------------------------
+captions_output = []
+
+if run_button:
     if not uploaded_files:
-        st.error("Upload at least one image first.")
-        st.stop()
-
-    # Create zip buffer
-    zip_buffer = io.BytesIO()
-
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
+        st.error("Please upload at least one image.")
+    else:
+        # Limit for safety (as requested)
+        uploaded_files = uploaded_files[:60]
 
         for file in uploaded_files:
             image = Image.open(file).convert("RGB")
-            st.image(image, caption=file.name, use_column_width=True)
 
-            # Generate caption
+            # Show image preview
+            st.image(image, width=250)
+
+            # Create caption
             inputs = processor(images=image, return_tensors="pt")
             with torch.no_grad():
                 output = model.generate(**inputs)
                 caption = processor.decode(output[0], skip_special_tokens=True)
 
-            # Add trigger token before caption
+            # Add trigger
             if trigger.strip():
                 final_caption = f"{trigger.strip()}. {caption}"
             else:
                 final_caption = caption
 
-            # ---- Save image ----
-            img_bytes = io.BytesIO()
-            image.save(img_bytes, format="PNG")
-            zipf.writestr(f"images/{file.name}", img_bytes.getvalue())
+            # Save for ZIP
+            captions_output.append((file.name, final_caption))
 
-            # ---- Save caption with matching filename ----
-            txt_name = file.name.rsplit(".", 1)[0] + ".txt"
-            zipf.writestr(f"captions/{txt_name}", final_caption)
+            # Show caption UI block
+            st.subheader(f"Caption for: {file.name}")
+            st.markdown(
+                f"""
+                <div style="
+                    background-color:#173a2f;
+                    padding:15px;
+                    border-radius:10px;
+                    color:white;
+                    font-size:16px;
+                ">
+                    {final_caption}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
-    st.success("Captions generated successfully! 🎉")
+        # -------------------------------------------------
+        # ZIP DOWNLOAD BUTTON
+        # -------------------------------------------------
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as zipf:
+            for filename, cap in captions_output:
+                txt_name = filename.rsplit('.', 1)[0] + ".txt"
+                zipf.writestr(txt_name, cap)
 
-    # Download ZIP
-    st.download_button(
-        label="Download Dataset ZIP",
-        data=zip_buffer.getvalue(),
-        file_name="captions_dataset.zip",
-        mime="application/zip"
-    )
+        st.download_button(
+            label="Download Captions as ZIP",
+            data=zip_buffer.getvalue(),
+            file_name="captions.zip",
+            mime="application/zip"
+        )

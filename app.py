@@ -1,123 +1,80 @@
 import streamlit as st
+import numpy as np
 from PIL import Image
-import torch
-from transformers import BlipProcessor, BlipForConditionalGeneration
+import tensorflow as tf
+import pickle
 
-st.set_page_config(page_title="Image Caption Generator", layout="centered")
-
-# ------------------------------
-# Custom CSS (bigger box + glow)
-# ------------------------------
-st.markdown("""
-<style>
-
-    /* Base uploader box (bigger + padding) */
-    div[data-testid="stFileUploader"] > section {
-        padding: 40px !important;
-        border: 3px dashed #666 !important;
-        border-radius: 14px !important;
-        transition: all 0.25s ease-out;
-        background-color: #1f1f1f10;
-    }
-
-    /* Glow on hover */
-    div[data-testid="stFileUploader"]:hover > section {
-        border-color: #4fa3ff !important;
-        box-shadow: 0px 0px 18px #4fa3ff55;
-        transform: scale(1.02);
-    }
-
-    /* Drag-over glow (simulated via focus-within) */
-    div[data-testid="stFileUploader"] > section:focus-within {
-        border-color: #00eaff !important;
-        box-shadow: 0px 0px 25px #00eaffaa;
-        background-color: #1f1f1f22;
-        transform: scale(1.03);
-    }
-
-</style>
-""", unsafe_allow_html=True)
-
-# ------------------------------
-# Load BLIP Model
-# ------------------------------
+# Load tokenizer + model
 @st.cache_resource
 def load_model():
-    processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-large")
-    model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-large")
-    return processor, model
+    model = tf.keras.models.load_model("mymodel.h5", compile=False)
+    with open("tokenizer.pkl", "rb") as f:
+        tokenizer = pickle.load(f)
+    return model, tokenizer
 
-processor, model = load_model()
+model, tokenizer = load_model()
 
+# Caption generator
+def generate_caption(img, max_len=20):
+    image = img.resize((224, 224))
+    image = np.array(image) / 255.0
+    image = np.expand_dims(image, axis=0)
+
+    # start token "<start>"
+    caption = ["startseq"]
+
+    for _ in range(max_len):
+        seq = tokenizer.texts_to_sequences([" ".join(caption)])[0]
+        seq = tf.keras.preprocessing.sequence.pad_sequences([seq], maxlen=34, padding="post")
+
+        y_pred = model.predict([image, seq], verbose=0)
+        y_pred = np.argmax(y_pred)
+
+        word = tokenizer.index_word.get(y_pred, None)
+        if word is None:
+            break
+        caption.append(word)
+        if word == "endseq":
+            break
+
+    final_caption = " ".join(caption[1:-1])  # remove startseq/endseq
+    return final_caption
+
+
+# Streamlit UI
 st.title("🖼️ Image Caption Generator")
-st.write("Clean, simple, WAN-ready captions for your datasets.")
+st.markdown("Upload an image, choose caption style, and generate a custom caption.")
 
-# ------------------------------
-# Detail Level Selector
-# ------------------------------
-detail = st.selectbox(
-    "Caption detail level:",
-    ["Basic", "Descriptive", "Highly Detailed"],
-)
+# Load custom CSS
+with open("style.css") as css:
+    st.markdown(f"<style>{css.read()}</style>", unsafe_allow_html=True)
 
-# Settings for each mode
-settings = {
-    "Basic": {
-        "max_length": 20,
-        "num_beams": 1,
-        "temperature": 1.0,
-        "repetition_penalty": 1.0
-    },
-    "Descriptive": {
-        "max_length": 40,
-        "num_beams": 3,
-        "temperature": 0.8,
-        "repetition_penalty": 1.1
-    },
-    "Highly Detailed": {
-        "max_length": 80,
-        "num_beams": 5,
-        "temperature": 0.7,
-        "repetition_penalty": 1.2
-    }
+# UI Controls
+length_mode = st.selectbox("Caption Length", ["Short", "Medium", "Long"])
+trigger_word = st.text_input("Optional Trigger Token (ex: sbanks25)")
+
+length_map = {
+    "Short": 12,
+    "Medium": 20,
+    "Long": 30,
 }
 
-# Optional custom trigger token
-trigger = st.text_input("Custom trigger token (optional):", placeholder="e.g., sbanks25")
+max_length = length_map[length_mode]
 
-# ------------------------------
-# Upload Area
-# ------------------------------
-uploaded_file = st.file_uploader(
-    "Drag & drop your image here",
-    type=["jpg", "jpeg", "png"]
-)
+# Upload area
+st.markdown('<div class="upload-box"> Drag & Drop Image Here </div>', unsafe_allow_html=True)
+uploaded = st.file_uploader(" ", type=["png", "jpg", "jpeg"])
 
-# ------------------------------
-# Caption Generation
-# ------------------------------
-if uploaded_file is not None:
-    image = Image.open(uploaded_file).convert("RGB")
-    st.image(image, caption="Uploaded image", use_column_width=True)
+# Display + Caption
+if uploaded:
+    img = Image.open(uploaded).convert("RGB")
+    st.image(img, caption="Uploaded Image", use_column_width=True)
 
-    if st.button("Generate Caption", use_container_width=True):
-        with st.spinner("Generating caption..."):
-            s = settings[detail]
+    if st.button("Generate Caption"):
+        with st.spinner("Analyzing..."):
+            cap = generate_caption(img, max_length)
+            if trigger_word.strip():
+                cap = f"{trigger_word.strip()} {cap}"
 
-            inputs = processor(image, return_tensors="pt")
-            output = model.generate(
-                **inputs,
-                max_length=s["max_length"],
-                num_beams=s["num_beams"],
-                temperature=s["temperature"],
-                repetition_penalty=s["repetition_penalty"]
-            )
-
-            caption = processor.decode(output[0], skip_special_tokens=True)
-
-            if trigger.strip() != "":
-                caption = f"{trigger.strip()}: {caption}"
-
-        st.success("Caption generated!")
-        st.write("### Caption:")
-        st.write(caption)
+        st.success("Caption Generated:")
+        st.write(cap)

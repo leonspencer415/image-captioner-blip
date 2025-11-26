@@ -1,0 +1,21 @@
+/* Make the dropzone bigger */
+.stDropzone {
+    border: 2px dashed #4B9CD3 !important;
+    padding: 60px !important;
+    border-radius: 12px;
+    transition: border-color 0.3s ease, background 0.3s ease;
+}
+
+/* Glow effect when hovering or dragging */
+.stDropzone:hover,
+.stDropzone[data-testid="stFileDropzone"] div:hover {
+    border-color: #82c7ff !important;
+    background: rgba(75, 156, 211, 0.08) !important;
+}
+
+/* Animate when dragging file over */
+.stDropzone.drag-active {
+    border-color: #00c3ff !important;
+    box-shadow: 0 0 25px rgba(0, 195, 255, 0.5);
+    background: rgba(0, 195, 255, 0.10) !important;
+}

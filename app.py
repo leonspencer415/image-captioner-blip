@@ -1,80 +1,109 @@
 import streamlit as st
-import numpy as np
+from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
-import tensorflow as tf
-import pickle
+import torch
 
-# Load tokenizer + model
+# ---------------------------
+# Load CSS
+# ---------------------------
+def load_css():
+    with open("styles.css") as f:
+        st.markdown(f"<style>{f.read()}</style>", unsafe_allow_html=True)
+
+load_css()
+
+# ---------------------------
+# Load BLIP model
+# ---------------------------
 @st.cache_resource
 def load_model():
-    model = tf.keras.models.load_model("mymodel.h5", compile=False)
-    with open("tokenizer.pkl", "rb") as f:
-        tokenizer = pickle.load(f)
-    return model, tokenizer
+    processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-large")
+    model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-large")
+    return processor, model
 
-model, tokenizer = load_model()
+processor, model = load_model()
 
-# Caption generator
-def generate_caption(img, max_len=20):
-    image = img.resize((224, 224))
-    image = np.array(image) / 255.0
-    image = np.expand_dims(image, axis=0)
+# ---------------------------
+# Caption generation function
+# ---------------------------
+def generate_caption(image, mode, length, trigger_token):
+    text_prompt = ""
 
-    # start token "<start>"
-    caption = ["startseq"]
+    # Mode instructions
+    if mode == "Simple / Direct":
+        text_prompt = "a clear simple caption of the image"
+    elif mode == "Descriptive":
+        text_prompt = "a detailed descriptive caption of the image"
+    elif mode == "Character LoRA (WAN 2.2 Style)":
+        text_prompt = (
+            "describe the person in the image focusing on physical attributes only, "
+            "no emotions, no actions, no story, pure objective appearance"
+        )
 
-    for _ in range(max_len):
-        seq = tokenizer.texts_to_sequences([" ".join(caption)])[0]
-        seq = tf.keras.preprocessing.sequence.pad_sequences([seq], maxlen=34, padding="post")
+    # Length instructions
+    if length == "Short":
+        length_prompt = "short caption, under 10 words"
+    elif length == "Medium":
+        length_prompt = "medium-length caption"
+    else:
+        length_prompt = "long detailed caption"
 
-        y_pred = model.predict([image, seq], verbose=0)
-        y_pred = np.argmax(y_pred)
+    final_prompt = f"{text_prompt}, {length_prompt}"
 
-        word = tokenizer.index_word.get(y_pred, None)
-        if word is None:
-            break
-        caption.append(word)
-        if word == "endseq":
-            break
+    # Trigger token (optional)
+    if trigger_token.strip():
+        final_prompt = f"{trigger_token.strip()} — {final_prompt}"
 
-    final_caption = " ".join(caption[1:-1])  # remove startseq/endseq
-    return final_caption
+    inputs = processor(image, final_prompt, return_tensors="pt")
+    out = model.generate(**inputs, max_new_tokens=40)
+    caption = processor.decode(out[0], skip_special_tokens=True)
+    return caption
 
 
-# Streamlit UI
-st.title("🖼️ Image Caption Generator")
-st.markdown("Upload an image, choose caption style, and generate a custom caption.")
+# ---------------------------
+# UI
+# ---------------------------
+st.title("📸 Image Caption Generator")
+st.write("Drag an image below and generate WAN 2.2–style captions quickly.")
 
-# Load custom CSS
-with open("style.css") as css:
-    st.markdown(f"<style>{css.read()}</style>", unsafe_allow_html=True)
+uploaded_image = st.file_uploader("Upload an image", type=["png", "jpg", "jpeg"])
 
-# UI Controls
-length_mode = st.selectbox("Caption Length", ["Short", "Medium", "Long"])
-trigger_word = st.text_input("Optional Trigger Token (ex: sbanks25)")
+# UI options
+mode = st.selectbox(
+    "Caption Mode",
+    [
+        "Simple / Direct",
+        "Descriptive",
+        "Character LoRA (WAN 2.2 Style)"
+    ]
+)
 
-length_map = {
-    "Short": 12,
-    "Medium": 20,
-    "Long": 30,
-}
+length = st.radio(
+    "Caption Length",
+    ["Short", "Medium", "Long"],
+    horizontal=True
+)
 
-max_length = length_map[length_mode]
+trigger_token = st.text_input(
+    "Optional Trigger Token (e.g., sbanks25)",
+    placeholder="Leave blank if not needed..."
+)
 
-# Upload area
-st.markdown('<div class="upload-box"> Drag & Drop Image Here </div>', unsafe_allow_html=True)
-uploaded = st.file_uploader(" ", type=["png", "jpg", "jpeg"])
+generate_button = st.button("✨ Generate Caption")
 
-# Display + Caption
-if uploaded:
-    img = Image.open(uploaded).convert("RGB")
-    st.image(img, caption="Uploaded Image", use_column_width=True)
+# ---------------------------
+# Handle captioning
+# ---------------------------
+if generate_button:
+    if uploaded_image is None:
+        st.error("Please upload an image first.")
+    else:
+        image = Image.open(uploaded_image).convert("RGB")
 
-    if st.button("Generate Caption"):
-        with st.spinner("Analyzing..."):
-            cap = generate_caption(img, max_length)
-            if trigger_word.strip():
-                cap = f"{trigger_word.strip()} {cap}"
+        with st.spinner("Generating caption…"):
+            cap = generate_caption(image, mode, length, trigger_token)
 
-        st.success("Caption Generated:")
-        st.write(cap)
+        st.subheader("Generated Caption")
+        st.success(cap)
+
+        st.image(image, caption="Uploaded Image", use_column_width=True)
